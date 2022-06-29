@@ -24,6 +24,9 @@
 #include <k4a/k4a.hpp>
 #include <k4arecord/playback.hpp>
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
+#include <diagnostic_updater/publisher.hpp>
+
 #if defined(K4A_BODY_TRACKING)
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <k4abt.hpp>
@@ -33,6 +36,8 @@
 //
 #include "azure_kinect_ros_driver/k4a_calibration_transform_data.h"
 #include "azure_kinect_ros_driver/k4a_ros_device_params.h"
+
+using DiagStatus = diagnostic_msgs::msg::DiagnosticStatus;
 
 class K4AROSDevice : public rclcpp::Node
 {
@@ -46,6 +51,10 @@ class K4AROSDevice : public rclcpp::Node
 
   void stopCameras();
   void stopImu();
+
+  void update();
+
+  void check_kinect_status();
 
   // Get camera calibration information for the depth camera
   void getDepthCameraInfo(sensor_msgs::msg::CameraInfo& camera_info);
@@ -135,6 +144,9 @@ class K4AROSDevice : public rclcpp::Node
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher_;
 
+  diagnostic_updater::Updater updater_;
+     char hostname_[HOST_NAME_MAX + 1];     
+  
 #if defined(K4A_BODY_TRACKING)
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr body_marker_publisher_;
 

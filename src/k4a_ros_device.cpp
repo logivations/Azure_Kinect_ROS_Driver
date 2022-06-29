@@ -21,6 +21,7 @@
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <k4a/k4a.hpp>
 
+
 // Project headers
 //
 #include "azure_kinect_ros_driver/k4a_ros_types.h"
@@ -36,6 +37,7 @@ using namespace visualization_msgs::msg;
 
 K4AROSDevice::K4AROSDevice()
   : Node("k4a_ros_device_node"),
+    updater(this),
     k4a_device_(nullptr),
     k4a_playback_handle_(nullptr),
 // clang-format off
@@ -48,6 +50,8 @@ K4AROSDevice::K4AROSDevice()
     last_imu_time_usec_(0),
     imu_stream_end_of_file_(false)
 {
+
+  gethostname(hostname_, sizeof(hostname_));
   // Declare an image transport
   auto image_transport_ = new image_transport::ImageTransport(static_cast<rclcpp::Node::SharedPtr>(this));
 
@@ -82,6 +86,10 @@ K4AROSDevice::K4AROSDevice()
   this->declare_parameter({depth_raw_topic + compressed_png_level});
   this->declare_parameter({depth_rect_topic + compressed_format});
   this->declare_parameter({depth_rect_topic + compressed_png_level});
+
+
+  updater_.setHardwareID(hostname_);
+  updater_.add("Kinect Status", this, &K4AROSDevice::update_diagnostics);
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -388,6 +396,28 @@ k4a_result_t K4AROSDevice::startCameras()
 #endif
 
   return K4A_RESULT_SUCCEEDED;
+}
+
+void MemMonitor::update(void)
+{
+  updater_.force_update();
+}
+
+void K4AROSDevice::check_kinect_status(diagnostic_updater::DiagnosticStatusWrapper & stat)
+{
+  //kinetic camera diagnostics task
+
+ 
+  stat.summary(
+      diagnostic_msgs.msg.DiagnosticStatus.ERROR,
+      f"Kinect Camera is disconnected",
+  )
+     
+  stat.summary(
+      diagnostic_msgs.msg.DiagnosticStatus.OK, "Kinetic Camera is connected"
+  )
+
+
 }
 
 k4a_result_t K4AROSDevice::startImu()

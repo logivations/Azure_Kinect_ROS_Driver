@@ -37,7 +37,6 @@ using namespace visualization_msgs::msg;
 
 K4AROSDevice::K4AROSDevice()
   : Node("k4a_ros_device_node"),
-    updater_(this),
     k4a_device_(nullptr),
     k4a_playback_handle_(nullptr),
 // clang-format off
@@ -350,9 +349,21 @@ void K4AROSDevice::startDiagnosticsUpdater()
 
         _diagnostics_updater->add("Kinect Camera Status", [this](diagnostic_updater::DiagnosticStatusWrapper& status)
         {
+
+          if(running_){
+          status.summary(
+                diagnostic_msgs.msg.DiagnosticStatus.OK, "Kinetic camera is connected"
+            )
+         
+          }else{
+             status.summary(
+                diagnostic_msgs.msg.DiagnosticStatus.ERROR,
+                "Kinect Camera is not connected",
+            )
+
+          }
         
                     
-        //  status.add(rs2_option_to_string(option), sensor->get_option(option));
 
         //   status.summary(0, "OK");
         });

@@ -52,9 +52,7 @@ class K4AROSDevice : public rclcpp::Node
   void stopCameras();
   void stopImu();
 
-  void update();
-
-  void check_kinect_status();
+  void startDiagnosticsUpdater();
 
   // Get camera calibration information for the depth camera
   void getDepthCameraInfo(sensor_msgs::msg::CameraInfo& camera_info);
@@ -144,8 +142,7 @@ class K4AROSDevice : public rclcpp::Node
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher_;
 
-  diagnostic_updater::Updater updater_;
-     char hostname_[HOST_NAME_MAX + 1];     
+  diagnostic_updater::Updater updater_;   
   
 #if defined(K4A_BODY_TRACKING)
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr body_marker_publisher_;

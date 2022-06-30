@@ -37,7 +37,7 @@ using namespace visualization_msgs::msg;
 
 K4AROSDevice::K4AROSDevice()
   : Node("k4a_ros_device_node"),
-    updater(this),
+    updater_(this),
     k4a_device_(nullptr),
     k4a_playback_handle_(nullptr),
 // clang-format off
@@ -51,7 +51,6 @@ K4AROSDevice::K4AROSDevice()
     imu_stream_end_of_file_(false)
 {
 
-  gethostname(hostname_, sizeof(hostname_));
   // Declare an image transport
   auto image_transport_ = new image_transport::ImageTransport(static_cast<rclcpp::Node::SharedPtr>(this));
 
@@ -87,9 +86,6 @@ K4AROSDevice::K4AROSDevice()
   this->declare_parameter({depth_rect_topic + compressed_format});
   this->declare_parameter({depth_rect_topic + compressed_png_level});
 
-
-  updater_.setHardwareID(hostname_);
-  updater_.add("Kinect Status", this, &K4AROSDevice::update_diagnostics);
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -237,6 +233,7 @@ K4AROSDevice::K4AROSDevice()
 
     k4a_hardware_version_t version_info = k4a_device_.get_version();
 
+
     RCLCPP_INFO(this->get_logger(),"RGB Version: %d.%d.%d", version_info.rgb.major, version_info.rgb.minor, version_info.rgb.iteration);
 
     RCLCPP_INFO(this->get_logger(),"Depth Version: %d.%d.%d", version_info.depth.major, version_info.depth.minor,
@@ -341,6 +338,28 @@ K4AROSDevice::~K4AROSDevice()
 #endif
 }
 
+void K4AROSDevice::startDiagnosticsUpdater()
+{
+    std::string serial_no = k4a_device_.get_serialnum();
+    if (_diagnostics_period > 0)
+    {
+        ROS_INFO_STREAM("Publish diagnostics every " << _diagnostics_period << " seconds.");
+        _diagnostics_updater = std::make_shared<diagnostic_updater::Updater>(&_node, _diagnostics_period);
+
+        _diagnostics_updater->setHardwareID(serial_no);
+
+        _diagnostics_updater->add("Kinect Camera Status", [this](diagnostic_updater::DiagnosticStatusWrapper& status)
+        {
+        
+                    
+        //  status.add(rs2_option_to_string(option), sensor->get_option(option));
+
+        //   status.summary(0, "OK");
+        });
+    }
+}
+
+
 k4a_result_t K4AROSDevice::startCameras()
 {
   k4a_device_configuration_t k4a_configuration = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
@@ -398,27 +417,6 @@ k4a_result_t K4AROSDevice::startCameras()
   return K4A_RESULT_SUCCEEDED;
 }
 
-void MemMonitor::update(void)
-{
-  updater_.force_update();
-}
-
-void K4AROSDevice::check_kinect_status(diagnostic_updater::DiagnosticStatusWrapper & stat)
-{
-  //kinetic camera diagnostics task
-
- 
-  stat.summary(
-      diagnostic_msgs.msg.DiagnosticStatus.ERROR,
-      f"Kinect Camera is disconnected",
-  )
-     
-  stat.summary(
-      diagnostic_msgs.msg.DiagnosticStatus.OK, "Kinetic Camera is connected"
-  )
-
-
-}
 
 k4a_result_t K4AROSDevice::startImu()
 {

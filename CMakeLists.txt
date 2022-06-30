@@ -33,7 +33,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(angles REQUIRED)
 find_package(diagnostic_updater REQUIRED)
-
+find_package(diagnostic_msgs REQUIRED)
 
 ###########
 ## Build ##
@@ -52,6 +52,7 @@ ament_target_dependencies(${PROJECT_NAME}_node rclcpp
   std_msgs 
   sensor_msgs
   visualization_msgs
+  diagnostic_msgs
   image_transport
   tf2
   tf2_ros

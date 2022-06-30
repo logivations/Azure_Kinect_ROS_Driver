@@ -92,6 +92,8 @@ K4AROSDevice::K4AROSDevice()
   ROS_PARAM_LIST
 #undef LIST_ENTRY
 
+  _diagnostics_period = 10;
+
   if (params_.recording_file != "")
   {
     RCLCPP_INFO(this->get_logger(),"Node is started in playback mode");
@@ -342,8 +344,9 @@ void K4AROSDevice::startDiagnosticsUpdater()
     std::string serial_no = k4a_device_.get_serialnum();
     if (_diagnostics_period > 0)
     {
-        ROS_INFO_STREAM("Publish diagnostics every " << _diagnostics_period << " seconds.");
-        _diagnostics_updater = std::make_shared<diagnostic_updater::Updater>(&_node, _diagnostics_period);
+        RCLCPP_INFO_STREAM(this->get_logger(),"Publish diagnostics every " << _diagnostics_period << " seconds.");
+
+        _diagnostics_updater = std::make_shared<diagnostic_updater::Updater>(this, _diagnostics_period);
 
         _diagnostics_updater->setHardwareID(serial_no);
 
@@ -351,21 +354,15 @@ void K4AROSDevice::startDiagnosticsUpdater()
         {
 
           if(running_){
-          status.summary(
-                diagnostic_msgs.msg.DiagnosticStatus.OK, "Kinetic camera is connected"
-            )
+          status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Kinetic camera is connected");
          
           }else{
              status.summary(
-                diagnostic_msgs.msg.DiagnosticStatus.ERROR,
-                "Kinect Camera is not connected",
-            )
+                diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Kinect Camera is not connected");
 
           }
         
-                    
-
-        //   status.summary(0, "OK");
+                  
         });
     }
 }

@@ -142,7 +142,8 @@ class K4AROSDevice : public rclcpp::Node
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher_;
 
-  diagnostic_updater::Updater updater_;   
+  std::shared_ptr<diagnostic_updater::Updater> _diagnostics_updater;
+  
   
 #if defined(K4A_BODY_TRACKING)
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr body_marker_publisher_;
@@ -152,6 +153,8 @@ class K4AROSDevice : public rclcpp::Node
 
   // Parameters
   K4AROSDeviceParams params_;
+  double _diagnostics_period;
+
 
   // K4A device
   k4a::device k4a_device_;

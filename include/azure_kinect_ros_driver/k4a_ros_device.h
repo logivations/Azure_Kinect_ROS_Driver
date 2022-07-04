@@ -185,6 +185,7 @@ class K4AROSDevice : public rclcpp::Node
   // Threads
   std::thread frame_publisher_thread_;
   std::thread imu_publisher_thread_;
+  std::thread update_diagnostics_thread_;
 };
 
 #endif  // K4A_ROS_DEVICE_H

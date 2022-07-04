@@ -53,6 +53,7 @@ ament_target_dependencies(${PROJECT_NAME}_node rclcpp
   sensor_msgs
   visualization_msgs
   diagnostic_msgs
+  diagnostic_updater
   image_transport
   tf2
   tf2_ros

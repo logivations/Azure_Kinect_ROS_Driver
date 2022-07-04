@@ -52,8 +52,6 @@ class K4AROSDevice : public rclcpp::Node
   void stopCameras();
   void stopImu();
 
-  void startDiagnosticsUpdater();
-
   // Get camera calibration information for the depth camera
   void getDepthCameraInfo(sensor_msgs::msg::CameraInfo& camera_info);
 
@@ -92,6 +90,7 @@ class K4AROSDevice : public rclcpp::Node
   k4a_result_t fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
                                    std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud);
 
+  void startDiagnosticsUpdaterThread();
   void framePublisherThread();
 #if defined(K4A_BODY_TRACKING)
   void bodyPublisherThread();

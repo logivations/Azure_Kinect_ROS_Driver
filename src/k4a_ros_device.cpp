@@ -306,6 +306,13 @@ K4AROSDevice::~K4AROSDevice()
   // Start tearing down the publisher threads
   running_ = false;
 
+
+  // Join the publisher thread
+  RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
+  update_diagnostics_thread_.join();
+  RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
+
+
 #if defined(K4A_BODY_TRACKING)
   // Join the publisher thread
   RCLCPP_INFO(this->get_logger(),"Joining body publisher thread");
@@ -323,6 +330,7 @@ K4AROSDevice::~K4AROSDevice()
   imu_publisher_thread_.join();
   RCLCPP_INFO(this->get_logger(),"IMU publisher thread joined");
 
+
   stopCameras();
   stopImu();
 
@@ -339,7 +347,7 @@ K4AROSDevice::~K4AROSDevice()
 #endif
 }
 
-void K4AROSDevice::startDiagnosticsUpdater()
+void K4AROSDevice::startDiagnosticsUpdaterThread()
 {
     std::string serial_no = k4a_device_.get_serialnum();
     if (_diagnostics_period > 0)
@@ -415,6 +423,9 @@ k4a_result_t K4AROSDevice::startCameras()
 
   // Prevent the worker thread from exiting immediately
   running_ = true;
+
+  // Start the thread that will update diagnostics
+  update_diagnostics_thread_ = thread(&K4AROSDevice::startDiagnosticsUpdaterThread, this);
 
   // Start the thread that will poll the cameras and publish frames
   frame_publisher_thread_ = thread(&K4AROSDevice::framePublisherThread, this);

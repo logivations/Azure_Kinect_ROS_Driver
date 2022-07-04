@@ -25,7 +25,6 @@ int main(int argc, char** argv)
   // Setup the K4A device
   std::shared_ptr<K4AROSDevice> device(new K4AROSDevice);
 
-  device->startDiagnosticsUpdater();
 
   k4a_result_t result = device->startCameras();
 
@@ -43,6 +42,7 @@ int main(int argc, char** argv)
   }
 
   RCLCPP_INFO(node->get_logger(),"K4A Started");
+
 
   if (result == K4A_RESULT_SUCCEEDED)
   {

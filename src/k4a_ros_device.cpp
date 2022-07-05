@@ -38,6 +38,7 @@ K4AROSDevice::K4AROSDevice()
   : Node("k4a_ros_device_node"),
     k4a_device_(nullptr),
     k4a_playback_handle_(nullptr),
+    stop_thread_diagnostics_(false),
 // clang-format off
 #if defined(K4A_BODY_TRACKING)
     k4abt_tracker_(nullptr),
@@ -302,10 +303,7 @@ K4AROSDevice::~K4AROSDevice()
   // Start tearing down the publisher threads
   running_ = false;
 
-  // Join the publisher thread
-  RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
-  update_diagnostics_thread_.join();
-  RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
+
 
 #if defined(K4A_BODY_TRACKING)
   // Join the publisher thread
@@ -323,6 +321,13 @@ K4AROSDevice::~K4AROSDevice()
   RCLCPP_INFO(this->get_logger(),"Joining IMU publisher thread");
   imu_publisher_thread_.join();
   RCLCPP_INFO(this->get_logger(),"IMU publisher thread joined");
+
+  stop_thread_diagnostics_ = true;
+  // Join the diagnostics thread
+  RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
+  update_diagnostics_thread_.join();
+  RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
+  stop_thread_diagnostics_ = false;
 
   stopCameras();
   stopImu();
@@ -354,6 +359,8 @@ void K4AROSDevice::startDiagnosticsUpdaterThread()
         _diagnostics_updater->add("Kinect Camera Status", [this](diagnostic_updater::DiagnosticStatusWrapper& status)
         {
 
+          if (stop_thread_diagnostics_) return;
+
           if(running_){
           status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Kinetic camera is connected");
          
@@ -365,6 +372,7 @@ void K4AROSDevice::startDiagnosticsUpdaterThread()
         
                   
         });
+
     }
 }
 

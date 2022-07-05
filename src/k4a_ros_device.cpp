@@ -21,7 +21,6 @@
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <k4a/k4a.hpp>
 
-
 // Project headers
 //
 #include "azure_kinect_ros_driver/k4a_ros_types.h"
@@ -49,7 +48,6 @@ K4AROSDevice::K4AROSDevice()
     last_imu_time_usec_(0),
     imu_stream_end_of_file_(false)
 {
-
   // Declare an image transport
   auto image_transport_ = new image_transport::ImageTransport(static_cast<rclcpp::Node::SharedPtr>(this));
 
@@ -84,7 +82,6 @@ K4AROSDevice::K4AROSDevice()
   this->declare_parameter({depth_raw_topic + compressed_png_level});
   this->declare_parameter({depth_rect_topic + compressed_format});
   this->declare_parameter({depth_rect_topic + compressed_png_level});
-
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -234,7 +231,6 @@ K4AROSDevice::K4AROSDevice()
 
     k4a_hardware_version_t version_info = k4a_device_.get_version();
 
-
     RCLCPP_INFO(this->get_logger(),"RGB Version: %d.%d.%d", version_info.rgb.major, version_info.rgb.minor, version_info.rgb.iteration);
 
     RCLCPP_INFO(this->get_logger(),"Depth Version: %d.%d.%d", version_info.depth.major, version_info.depth.minor,
@@ -306,12 +302,10 @@ K4AROSDevice::~K4AROSDevice()
   // Start tearing down the publisher threads
   running_ = false;
 
-
-  // // Join the publisher thread
-  // RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
-  // update_diagnostics_thread_.join();
-  // RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
-
+  // Join the publisher thread
+  RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
+  update_diagnostics_thread_.join();
+  RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
 
 #if defined(K4A_BODY_TRACKING)
   // Join the publisher thread
@@ -329,7 +323,6 @@ K4AROSDevice::~K4AROSDevice()
   RCLCPP_INFO(this->get_logger(),"Joining IMU publisher thread");
   imu_publisher_thread_.join();
   RCLCPP_INFO(this->get_logger(),"IMU publisher thread joined");
-
 
   stopCameras();
   stopImu();
@@ -435,7 +428,6 @@ k4a_result_t K4AROSDevice::startCameras()
 
   return K4A_RESULT_SUCCEEDED;
 }
-
 
 k4a_result_t K4AROSDevice::startImu()
 {

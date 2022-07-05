@@ -92,7 +92,7 @@ K4AROSDevice::K4AROSDevice()
   ROS_PARAM_LIST
 #undef LIST_ENTRY
 
-  _diagnostics_period = 10;
+  _diagnostics_period = 4;
 
   if (params_.recording_file != "")
   {
@@ -307,10 +307,10 @@ K4AROSDevice::~K4AROSDevice()
   running_ = false;
 
 
-  // Join the publisher thread
-  RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
-  update_diagnostics_thread_.join();
-  RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
+  // // Join the publisher thread
+  // RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
+  // update_diagnostics_thread_.join();
+  // RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
 
 
 #if defined(K4A_BODY_TRACKING)

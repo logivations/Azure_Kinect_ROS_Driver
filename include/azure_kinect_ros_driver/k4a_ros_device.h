@@ -140,8 +140,6 @@ class K4AROSDevice : public rclcpp::Node
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_orientation_publisher_;
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher_;
-
-  std::shared_ptr<diagnostic_updater::Updater> _diagnostics_updater;
   
   
 #if defined(K4A_BODY_TRACKING)

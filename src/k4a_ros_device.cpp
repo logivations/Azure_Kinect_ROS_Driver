@@ -375,7 +375,7 @@ void K4AROSDevice::startDiagnosticsUpdaterThread()
 
           // create timer of some frequency 
          while (!stop_thread_diagnostics_) {
-            _diagnostics_updater.update();        
+            _diagnostics_updater->force_update();        
             timer.sleep();
           }
 

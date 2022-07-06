@@ -348,6 +348,8 @@ K4AROSDevice::~K4AROSDevice()
 void K4AROSDevice::startDiagnosticsUpdaterThread()
 {
     std::string serial_no = k4a_device_.get_serialnum();
+    rclcpp::Rate timer(0.5);
+
     if (_diagnostics_period > 0)
     {
         RCLCPP_INFO_STREAM(this->get_logger(),"Publish diagnostics every " << _diagnostics_period << " seconds.");
@@ -358,8 +360,6 @@ void K4AROSDevice::startDiagnosticsUpdaterThread()
 
         _diagnostics_updater->add("Kinect Camera Status", [this](diagnostic_updater::DiagnosticStatusWrapper& status)
         {
-
-          if (stop_thread_diagnostics_) return;
 
           if(running_){
           status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Kinetic camera is connected");
@@ -372,6 +372,12 @@ void K4AROSDevice::startDiagnosticsUpdaterThread()
         
                   
         });
+
+          // create timer of some frequency 
+         while (!stop_thread_diagnostics_) {
+            _diagnostics_updater.update();        
+            timer.sleep();
+          }
 
     }
 }

@@ -348,7 +348,7 @@ void K4AROSDevice::startDiagnosticsUpdaterThread()
     std::string serial_no = k4a_device_.get_serialnum();
     rclcpp::Rate timer(0.5);
 
-        _diagnostics_updater = std::make_shared<diagnostic_updater::Updater>(this);
+       auto  _diagnostics_updater = std::make_shared<diagnostic_updater::Updater>(this);
 
         _diagnostics_updater->setHardwareID(serial_no);
 

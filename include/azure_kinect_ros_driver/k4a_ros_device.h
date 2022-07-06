@@ -152,8 +152,6 @@ class K4AROSDevice : public rclcpp::Node
 
   // Parameters
   K4AROSDeviceParams params_;
-  double _diagnostics_period;
-
 
   // K4A device
   k4a::device k4a_device_;

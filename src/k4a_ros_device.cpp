@@ -38,6 +38,7 @@ K4AROSDevice::K4AROSDevice()
   : Node("k4a_ros_device_node"),
     k4a_device_(nullptr),
     k4a_playback_handle_(nullptr),
+    stop_thread_diagnostics_(false),
 // clang-format off
 #if defined(K4A_BODY_TRACKING)
     k4abt_tracker_(nullptr),
@@ -300,6 +301,8 @@ K4AROSDevice::~K4AROSDevice()
   // Start tearing down the publisher threads
   running_ = false;
 
+
+
 #if defined(K4A_BODY_TRACKING)
   // Join the publisher thread
   RCLCPP_INFO(this->get_logger(),"Joining body publisher thread");
@@ -317,6 +320,13 @@ K4AROSDevice::~K4AROSDevice()
   imu_publisher_thread_.join();
   RCLCPP_INFO(this->get_logger(),"IMU publisher thread joined");
 
+  stop_thread_diagnostics_ = true;
+  // Join the diagnostics thread
+  RCLCPP_INFO(this->get_logger(),"Joining diagnostics thread");
+  update_diagnostics_thread_.join();
+  RCLCPP_INFO(this->get_logger(),"Diagnostics thread joined");
+  stop_thread_diagnostics_ = false;
+
   stopCameras();
   stopImu();
 
@@ -332,6 +342,40 @@ K4AROSDevice::~K4AROSDevice()
   }
 #endif
 }
+
+void K4AROSDevice::startDiagnosticsUpdaterThread()
+{
+    std::string serial_no = k4a_device_.get_serialnum();
+    rclcpp::Rate timer(0.5);
+
+       auto  _diagnostics_updater = std::make_shared<diagnostic_updater::Updater>(this);
+
+        _diagnostics_updater->setHardwareID(serial_no);
+
+        _diagnostics_updater->add("Kinect Camera Status", [this](diagnostic_updater::DiagnosticStatusWrapper& status)
+        {
+
+          if(running_){
+          status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Kinetic camera is connected");
+         
+          }else{
+             status.summary(
+                diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Kinect Camera is not connected");
+
+          }
+        
+                  
+        });
+
+          // create timer of some frequency 
+         while (!stop_thread_diagnostics_) {
+            _diagnostics_updater->force_update();        
+            timer.sleep();
+          }
+
+    
+}
+
 
 k4a_result_t K4AROSDevice::startCameras()
 {
@@ -380,6 +424,9 @@ k4a_result_t K4AROSDevice::startCameras()
 
   // Prevent the worker thread from exiting immediately
   running_ = true;
+
+  // Start the thread that will update diagnostics
+  update_diagnostics_thread_ = thread(&K4AROSDevice::startDiagnosticsUpdaterThread, this);
 
   // Start the thread that will poll the cameras and publish frames
   frame_publisher_thread_ = thread(&K4AROSDevice::framePublisherThread, this);

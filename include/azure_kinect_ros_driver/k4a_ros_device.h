@@ -24,6 +24,9 @@
 #include <k4a/k4a.hpp>
 #include <k4arecord/playback.hpp>
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
+#include <diagnostic_updater/publisher.hpp>
+
 #if defined(K4A_BODY_TRACKING)
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <k4abt.hpp>
@@ -33,6 +36,8 @@
 //
 #include "azure_kinect_ros_driver/k4a_calibration_transform_data.h"
 #include "azure_kinect_ros_driver/k4a_ros_device_params.h"
+
+using DiagStatus = diagnostic_msgs::msg::DiagnosticStatus;
 
 class K4AROSDevice : public rclcpp::Node
 {
@@ -85,6 +90,7 @@ class K4AROSDevice : public rclcpp::Node
   k4a_result_t fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
                                    std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud);
 
+  void startDiagnosticsUpdaterThread();
   void framePublisherThread();
 #if defined(K4A_BODY_TRACKING)
   void bodyPublisherThread();
@@ -134,7 +140,8 @@ class K4AROSDevice : public rclcpp::Node
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_orientation_publisher_;
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher_;
-
+  
+  
 #if defined(K4A_BODY_TRACKING)
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr body_marker_publisher_;
 
@@ -170,10 +177,12 @@ class K4AROSDevice : public rclcpp::Node
   // Last imu timestamp for synchronizing playback capture and imu thread
   std::atomic_uint64_t last_imu_time_usec_;
   std::atomic_bool imu_stream_end_of_file_;
+  std::atomic_bool stop_thread_diagnostics_;
 
   // Threads
   std::thread frame_publisher_thread_;
   std::thread imu_publisher_thread_;
+  std::thread update_diagnostics_thread_;
 };
 
 #endif  // K4A_ROS_DEVICE_H

@@ -78,10 +78,6 @@ K4AROSDevice::K4AROSDevice()
   this->declare_parameter("imu_rate_target", rclcpp::ParameterValue(0));
   this->declare_parameter("wired_sync_mode", rclcpp::ParameterValue(0));
   this->declare_parameter("subordinate_delay_off_master_usec", rclcpp::ParameterValue(0));
-  // this->declare_parameter({depth_raw_topic + compressed_format});
-  // this->declare_parameter({depth_raw_topic + compressed_png_level});
-  // this->declare_parameter({depth_rect_topic + compressed_format});
-  // this->declare_parameter({depth_rect_topic + compressed_png_level});
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -194,7 +190,7 @@ K4AROSDevice::K4AROSDevice()
       {
         device = k4a::device::open(i);
       }
-      catch (exception)
+      catch (exception const&)
       {
         RCLCPP_ERROR_STREAM(this->get_logger(),"Failed to open K4A device at index " << i);
         continue;
@@ -258,14 +254,6 @@ K4AROSDevice::K4AROSDevice()
 
   depth_raw_publisher_ = image_transport_->advertise("depth/image_raw", 1, true);
   depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
-
-  if (params_.depth_unit == sensor_msgs::image_encodings::TYPE_16UC1) {
-    // set lowest PNG compression for maximum FPS
-    this->set_parameter({depth_raw_topic + compressed_format, "png"});
-    this->set_parameter({depth_raw_topic + compressed_png_level, 1});
-    this->set_parameter({depth_rect_topic + compressed_format, "png"});
-    this->set_parameter({depth_rect_topic + compressed_png_level, 1});
-  }
 
   depth_raw_publisher_ = image_transport_->advertise(depth_raw_topic, 1, true);
   depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
@@ -910,7 +898,6 @@ void K4AROSDevice::framePublisherThread()
 {
   rclcpp::Rate loop_rate(params_.fps);
 
-  k4a_wait_result_t wait_result;
   k4a_result_t result;
 
   CameraInfo rgb_raw_camera_info;

@@ -34,8 +34,8 @@ using namespace std;
 using namespace visualization_msgs::msg;
 #endif
 
-K4AROSDevice::K4AROSDevice()
-  : Node("k4a_ros_device_node"),
+K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
+: Node("k4a_ros_device_node", options),
     k4a_device_(nullptr),
     k4a_playback_handle_(nullptr),
     stop_thread_diagnostics_(false),
@@ -281,6 +281,22 @@ K4AROSDevice::K4AROSDevice()
     body_index_map_publisher_ = image_transport::create_publisher(this,"body_index_map/image_raw");
   }
 #endif
+  
+  k4a_result_t result = this->startCameras();
+
+  if (result != K4A_RESULT_SUCCEEDED)
+  {
+    RCLCPP_ERROR_STREAM(this->get_logger(),"Failed to start cameras");
+  }
+
+  result = this->startImu();
+  if (result != K4A_RESULT_SUCCEEDED)
+  {
+    RCLCPP_ERROR_STREAM(this->get_logger(),"Failed to start IMU");
+  }
+
+  RCLCPP_INFO(this->get_logger(),"K4A Started");
+
 }
 
 K4AROSDevice::~K4AROSDevice()
@@ -602,7 +618,7 @@ k4a_result_t K4AROSDevice::renderBGRA32ToROS(std::shared_ptr<sensor_msgs::msg::I
 }
 
 k4a_result_t K4AROSDevice::getRgbPointCloudInDepthFrame(const k4a::capture& capture,
-                                                        std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud)
+                                                        sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
   const k4a::image k4a_depth_frame = capture.get_depth_image();
   if (!k4a_depth_frame)
@@ -634,7 +650,7 @@ k4a_result_t K4AROSDevice::getRgbPointCloudInDepthFrame(const k4a::capture& capt
 }
 
 k4a_result_t K4AROSDevice::getRgbPointCloudInRgbFrame(const k4a::capture& capture,
-                                                      std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud)
+                                                      sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
   k4a::image k4a_depth_frame = capture.get_depth_image();
   if (!k4a_depth_frame)
@@ -664,7 +680,7 @@ k4a_result_t K4AROSDevice::getRgbPointCloudInRgbFrame(const k4a::capture& captur
   return fillColorPointCloud(calibration_data_.point_cloud_image_, k4a_bgra_frame, point_cloud);
 }
 
-k4a_result_t K4AROSDevice::getPointCloud(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud)
+k4a_result_t K4AROSDevice::getPointCloud(const k4a::capture& capture, sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
   k4a::image k4a_depth_frame = capture.get_depth_image();
 
@@ -685,7 +701,7 @@ k4a_result_t K4AROSDevice::getPointCloud(const k4a::capture& capture, std::share
 }
 
 k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
-                                               std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud)
+                                               sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
   point_cloud->height = pointcloud_image.get_height_pixels();
   point_cloud->width = pointcloud_image.get_width_pixels();
@@ -743,7 +759,7 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_imag
   return K4A_RESULT_SUCCEEDED;
 }
 
-k4a_result_t K4AROSDevice::fillPointCloud(const k4a::image& pointcloud_image, std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud)
+k4a_result_t K4AROSDevice::fillPointCloud(const k4a::image& pointcloud_image, sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
   point_cloud->height = pointcloud_image.get_height_pixels();
   point_cloud->width = pointcloud_image.get_width_pixels();
@@ -977,7 +993,7 @@ void K4AROSDevice::framePublisherThread()
     Image::SharedPtr depth_raw_frame(new Image);
     Image::SharedPtr depth_rect_frame(new Image);
     Image::SharedPtr ir_raw_frame(new Image);
-    PointCloud2::SharedPtr point_cloud(new PointCloud2);
+    PointCloud2::UniquePtr point_cloud = std::make_unique<PointCloud2>();
 
     if (params_.depth_enabled)
     {
@@ -1217,7 +1233,7 @@ void K4AROSDevice::framePublisherThread()
 
       if (params_.point_cloud || params_.rgb_point_cloud)
       {
-        pointcloud_publisher_->publish(*point_cloud);
+        pointcloud_publisher_->publish(std::move(point_cloud));
       }
     }
 
@@ -1520,3 +1536,6 @@ void K4AROSDevice::updateTimestampOffset(const std::chrono::microseconds& k4a_de
                                      std::floor(alpha * (device_to_realtime - device_to_realtime_offset_).count())));
   }
 }
+
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(K4AROSDevice)

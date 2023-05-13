@@ -271,7 +271,9 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
 
   if (params_.point_cloud || params_.rgb_point_cloud) {
     rclcpp::QoS custom_qos(KeepLast(1), rmw_qos_profile_sensor_data);
-    pointcloud_publisher_ = this->create_publisher<PointCloud2>("points2", custom_qos);
+    rclcpp::PublisherOptions options;
+    options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
+    pointcloud_publisher_ = this->create_publisher<PointCloud2>("points2", custom_qos, options);
   }
 
 #if defined(K4A_BODY_TRACKING)
@@ -1233,11 +1235,11 @@ void K4AROSDevice::framePublisherThread()
 
       if (params_.point_cloud || params_.rgb_point_cloud)
       {
+        // RCLCPP_INFO(this->get_logger()," published message with address: %p", static_cast<void*>(point_cloud.get()));
         pointcloud_publisher_->publish(std::move(point_cloud));
       }
     }
 
-    rclcpp::spin_some(shared_from_this());
     loop_rate.sleep();
   }
 }

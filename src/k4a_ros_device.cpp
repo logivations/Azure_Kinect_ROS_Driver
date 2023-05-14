@@ -1235,7 +1235,6 @@ void K4AROSDevice::framePublisherThread()
 
       if (params_.point_cloud || params_.rgb_point_cloud)
       {
-        // RCLCPP_INFO(this->get_logger()," published message with address: %p", static_cast<void*>(point_cloud.get()));
         pointcloud_publisher_->publish(std::move(point_cloud));
       }
     }

@@ -22,6 +22,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -40,13 +41,10 @@ find_package(diagnostic_msgs REQUIRED)
 ###########
 
 
-## Declare a C++ executable
-add_executable(${PROJECT_NAME}_node
-  src/k4a_ros_bridge_node.cpp
+add_library(${PROJECT_NAME}_node SHARED 
   src/k4a_ros_device.cpp
   src/k4a_ros_device_params.cpp
-  src/k4a_calibration_transform_data.cpp
-  )
+  src/k4a_calibration_transform_data.cpp)
 
 ament_target_dependencies(${PROJECT_NAME}_node rclcpp 
   std_msgs 
@@ -58,6 +56,7 @@ ament_target_dependencies(${PROJECT_NAME}_node rclcpp
   tf2
   tf2_ros
   tf2_geometry_msgs
+  rclcpp_components
   cv_bridge
   angles)
 
@@ -109,6 +108,8 @@ target_link_libraries(${PROJECT_NAME}_node
   ${K4A_LIBS}
 )
 
+rclcpp_components_register_nodes(${PROJECT_NAME}_node "K4AROSDevice")
+
 #############
 ## Install ##
 #############
@@ -118,8 +119,10 @@ target_link_libraries(${PROJECT_NAME}_node
 
 ## Mark executables and/or libraries for installation
 install(TARGETS ${PROJECT_NAME}_node
-  DESTINATION lib/${PROJECT_NAME}
+  LIBRARY DESTINATION lib
 )
+ament_export_libraries(${library_name}) 
+
 message("Added libs")
 
 ## Mark other files for installation (e.g. launch and bag files, etc.)

@@ -171,6 +171,8 @@ class K4AROSDevice : public rclcpp::Node
   // Thread control
   volatile bool running_;
 
+  int count_not_get_capture_{0};
+
   // Last capture timestamp for synchronizing playback capture and imu thread
   std::atomic_uint64_t last_capture_time_usec_;
 

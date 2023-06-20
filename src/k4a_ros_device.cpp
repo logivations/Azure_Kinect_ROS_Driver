@@ -950,7 +950,7 @@ void K4AROSDevice::framePublisherThread()
           rclcpp::shutdown();
           return;
         }
-        RCLCPP_FATAL(this->get_logger(),"Failed to poll cameras: trying again...");
+        RCLCPP_ERROR(this->get_logger(),"Failed to poll cameras: trying again...");
         count_not_get_capture_++;
         continue;
       }

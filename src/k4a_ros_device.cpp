@@ -238,6 +238,10 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   }
 
   // Register our topics
+    rclcpp::QoS custom_qos(KeepLast(1), rmw_qos_profile_sensor_data);
+    rclcpp::PublisherOptions sub_options;
+    sub_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
+
   if (params_.color_format == "jpeg")
   {
     // JPEG images are directly published on 'rgb/image_raw/compressed' so that
@@ -248,20 +252,17 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   }
   else if (params_.color_format == "bgra")
   {
-    rgb_raw_publisher_ = image_transport_->advertise("rgb/image_raw", 1, true);
+    rgb_raw_publisher_ = this->create_publisher<Image>("rgb/image_raw", custom_qos, sub_options);
   }
   rgb_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("rgb/camera_info", 1);
 
-  depth_raw_publisher_ = image_transport_->advertise("depth/image_raw", 1, true);
+  depth_raw_publisher_ = this->create_publisher<Image>(depth_raw_topic, custom_qos, sub_options);
   depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
 
-  depth_raw_publisher_ = image_transport_->advertise(depth_raw_topic, 1, true);
-  depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
-
-  depth_rect_publisher_ = image_transport_->advertise(depth_rect_topic, 1, true);
+  depth_rect_publisher_ = this->create_publisher<Image>(depth_rect_topic, custom_qos, sub_options);
   depth_rect_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth_to_rgb/camera_info", 1);
 
-  rgb_rect_publisher_ = image_transport_->advertise("rgb_to_depth/image_raw", 1, true);
+  rgb_rect_publisher_ = this->create_publisher<Image>("rgb_to_depth/image_raw", custom_qos, sub_options);
   rgb_rect_camerainfo_publisher_ = this->create_publisher<CameraInfo>("rgb_to_depth/camera_info", 1);
 
   ir_raw_publisher_ = image_transport_->advertise("ir/image_raw", 1, true);
@@ -270,10 +271,7 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   imu_orientation_publisher_ = this->create_publisher<Imu>("imu", 200);
 
   if (params_.point_cloud || params_.rgb_point_cloud) {
-    rclcpp::QoS custom_qos(KeepLast(1), rmw_qos_profile_sensor_data);
-    rclcpp::PublisherOptions options;
-    options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
-    pointcloud_publisher_ = this->create_publisher<PointCloud2>("points2", custom_qos, options);
+    pointcloud_publisher_ = this->create_publisher<PointCloud2>("points2", custom_qos, sub_options);
   }
 
 #if defined(K4A_BODY_TRACKING)
@@ -475,7 +473,7 @@ void K4AROSDevice::stopImu()
   }
 }
 
-k4a_result_t K4AROSDevice::getDepthFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::Image>& depth_image,
+k4a_result_t K4AROSDevice::getDepthFrame(const k4a::capture& capture, sensor_msgs::msg::Image::UniquePtr& depth_image,
                                           bool rectified = false)
 {
   k4a::image k4a_depth_frame = capture.get_depth_image();
@@ -497,7 +495,7 @@ k4a_result_t K4AROSDevice::getDepthFrame(const k4a::capture& capture, std::share
   return renderDepthToROS(depth_image, k4a_depth_frame);
 }
 
-k4a_result_t K4AROSDevice::renderDepthToROS(std::shared_ptr<sensor_msgs::msg::Image>& depth_image, k4a::image& k4a_depth_frame)
+k4a_result_t K4AROSDevice::renderDepthToROS(sensor_msgs::msg::Image::UniquePtr& depth_image, k4a::image& k4a_depth_frame)
 {
   cv::Mat depth_frame_buffer_mat(k4a_depth_frame.get_height_pixels(), k4a_depth_frame.get_width_pixels(), CV_16UC1,
                                  k4a_depth_frame.get_buffer());
@@ -517,9 +515,9 @@ k4a_result_t K4AROSDevice::renderDepthToROS(std::shared_ptr<sensor_msgs::msg::Im
     return K4A_RESULT_FAILED;
   }
 
-  depth_image =
-      cv_bridge::CvImage(std_msgs::msg::Header(), encoding, depth_frame_buffer_mat).toImageMsg();
-
+depth_image = std::make_unique<sensor_msgs::msg::Image>(
+      *cv_bridge::CvImage(std_msgs::msg::Header(), encoding, depth_frame_buffer_mat).toImageMsg()
+  );
   return K4A_RESULT_SUCCEEDED;
 }
 
@@ -574,7 +572,7 @@ k4a_result_t K4AROSDevice::getJpegRgbFrame(const k4a::capture& capture, std::sha
   return K4A_RESULT_SUCCEEDED;
 }
 
-k4a_result_t K4AROSDevice::getRbgFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::Image>& rgb_image,
+k4a_result_t K4AROSDevice::getRbgFrame(const k4a::capture& capture, sensor_msgs::msg::Image::UniquePtr& rgb_image,
                                        bool rectified = false)
 {
   k4a::image k4a_bgra_frame = capture.get_color_image();
@@ -607,17 +605,18 @@ k4a_result_t K4AROSDevice::getRbgFrame(const k4a::capture& capture, std::shared_
   return renderBGRA32ToROS(rgb_image, k4a_bgra_frame);
 }
 
-// Helper function that renders any BGRA K4A frame to a ROS ImagePtr. Useful for rendering intermediary frames
-// during debugging of image processing functions
-k4a_result_t K4AROSDevice::renderBGRA32ToROS(std::shared_ptr<sensor_msgs::msg::Image>& rgb_image, k4a::image& k4a_bgra_frame)
+k4a_result_t K4AROSDevice::renderBGRA32ToROS(sensor_msgs::msg::Image::UniquePtr& rgb_image, k4a::image& k4a_bgra_frame)
 {
   cv::Mat rgb_buffer_mat(k4a_bgra_frame.get_height_pixels(), k4a_bgra_frame.get_width_pixels(), CV_8UC4,
                          k4a_bgra_frame.get_buffer());
 
-  rgb_image = cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::BGRA8, rgb_buffer_mat).toImageMsg();
+  rgb_image = std::make_unique<sensor_msgs::msg::Image>(
+      *cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::BGRA8, rgb_buffer_mat).toImageMsg()
+  );
 
   return K4A_RESULT_SUCCEEDED;
 }
+
 
 k4a_result_t K4AROSDevice::getRgbPointCloudInDepthFrame(const k4a::capture& capture,
                                                         sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
@@ -994,10 +993,10 @@ void K4AROSDevice::framePublisherThread()
     }
 
     CompressedImage::SharedPtr rgb_jpeg_frame(new CompressedImage);
-    Image::SharedPtr rgb_raw_frame(new Image);
-    Image::SharedPtr rgb_rect_frame(new Image);
-    Image::SharedPtr depth_raw_frame(new Image);
-    Image::SharedPtr depth_rect_frame(new Image);
+    Image::UniquePtr rgb_raw_frame = std::make_unique<Image>();
+    Image::UniquePtr rgb_rect_frame = std::make_unique<Image>();
+    Image::UniquePtr depth_raw_frame = std::make_unique<Image>();
+    Image::UniquePtr depth_rect_frame = std::make_unique<Image>();
     Image::SharedPtr ir_raw_frame(new Image);
     PointCloud2::UniquePtr point_cloud = std::make_unique<PointCloud2>();
 
@@ -1060,7 +1059,7 @@ void K4AROSDevice::framePublisherThread()
             depth_raw_frame->header.stamp = capture_time;
             depth_raw_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_;
 
-            depth_raw_publisher_.publish(depth_raw_frame);
+            depth_raw_publisher_->publish(std::move(depth_raw_frame));
             depth_raw_camerainfo_publisher_->publish(depth_raw_camera_info);
           }
         }
@@ -1089,7 +1088,7 @@ void K4AROSDevice::framePublisherThread()
 
             depth_rect_frame->header.stamp = capture_time;
             depth_rect_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
-            depth_rect_publisher_.publish(depth_rect_frame);
+            depth_rect_publisher_->publish(std::move(depth_rect_frame));
 
             // Re-synchronize the header timestamps since we cache the camera calibration message
             depth_rect_camera_info.header.stamp = capture_time;
@@ -1164,7 +1163,7 @@ void K4AROSDevice::framePublisherThread()
 
           rgb_raw_frame->header.stamp = capture_time;
           rgb_raw_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
-          rgb_raw_publisher_.publish(rgb_raw_frame);
+          rgb_raw_publisher_->publish(std::move(rgb_raw_frame));
 
           // Re-synchronize the header timestamps since we cache the camera calibration message
           rgb_raw_camera_info.header.stamp = capture_time;
@@ -1192,7 +1191,7 @@ void K4AROSDevice::framePublisherThread()
 
           rgb_rect_frame->header.stamp = capture_time;
           rgb_rect_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_;
-          rgb_rect_publisher_.publish(rgb_rect_frame);
+          rgb_rect_publisher_->publish(std::move(rgb_rect_frame));
 
           // Re-synchronize the header timestamps since we cache the camera calibration message
           rgb_rect_camera_info.header.stamp = capture_time;

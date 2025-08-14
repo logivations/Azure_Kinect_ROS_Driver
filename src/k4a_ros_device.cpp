@@ -1141,11 +1141,6 @@ void K4AROSDevice::framePublisherThread()
 
           rclcpp::Time current_time = this->get_clock()->now();
 
-          // Print timestamp before publishing
-          RCLCPP_INFO(this->get_logger(), "RGB JPEG image timestamp: %f, Current time: %f",
-                      rgb_jpeg_frame->header.stamp.sec + rgb_jpeg_frame->header.stamp.nanosec * 1e-9,
-                      current_time.seconds());
-
           // Check delay between message timestamp and current time
           rclcpp::Duration delay = current_time - rgb_jpeg_frame->header.stamp;
           double delay_seconds = delay.seconds();
@@ -1182,11 +1177,6 @@ void K4AROSDevice::framePublisherThread()
           rgb_raw_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
 
           rclcpp::Time current_time = this->get_clock()->now();
-
-          // Print timestamp before publishing
-          RCLCPP_INFO(this->get_logger(), "RGB image timestamp: %f, Current time: %f",
-                      rgb_raw_frame->header.stamp.sec + rgb_raw_frame->header.stamp.nanosec * 1e-9,
-                      current_time.seconds());
 
           // Check delay between message timestamp and current time
           rclcpp::Duration delay = current_time - rgb_raw_frame->header.stamp;

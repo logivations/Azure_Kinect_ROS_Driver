@@ -281,7 +281,7 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
     body_index_map_publisher_ = image_transport::create_publisher(this,"body_index_map/image_raw");
   }
 #endif
-  
+
   k4a_result_t result = this->startCameras();
 
   if (result != K4A_RESULT_SUCCEEDED)
@@ -360,23 +360,23 @@ void K4AROSDevice::startDiagnosticsUpdaterThread()
 
           if(running_){
           status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Kinetic camera is connected");
-         
+
           }else{
              status.summary(
                 diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Kinect Camera is not connected");
 
           }
-        
-                  
+
+
         });
 
-          // create timer of some frequency 
+          // create timer of some frequency
          while (!stop_thread_diagnostics_) {
-            _diagnostics_updater->force_update();        
+            _diagnostics_updater->force_update();
             timer.sleep();
           }
 
-    
+
 }
 
 
@@ -450,7 +450,7 @@ k4a_result_t K4AROSDevice::startImu()
 
   // Start the IMU publisher thread
   imu_publisher_thread_ = thread(&K4AROSDevice::imuPublisherThread, this);
-  
+
   return K4A_RESULT_SUCCEEDED;
 }
 
@@ -1138,6 +1138,23 @@ void K4AROSDevice::framePublisherThread()
 
           rgb_jpeg_frame->header.stamp = capture_time;
           rgb_jpeg_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
+
+          rclcpp::Time current_time = this->get_clock()->now();
+
+          // Print timestamp before publishing
+          RCLCPP_INFO(this->get_logger(), "RGB JPEG image timestamp: %f, Current time: %f",
+                      rgb_jpeg_frame->header.stamp.sec + rgb_jpeg_frame->header.stamp.nanosec * 1e-9,
+                      current_time.seconds());
+
+          // Check delay between message timestamp and current time
+          rclcpp::Duration delay = current_time - rgb_jpeg_frame->header.stamp;
+          double delay_seconds = delay.seconds();
+
+          if (delay_seconds > 0.8)
+          {
+            RCLCPP_INFO(this->get_logger(), "RGB JPEG image delay exceeds 0.8s: %.3f seconds", delay_seconds);
+          }
+
           rgb_jpeg_publisher_->publish(*rgb_jpeg_frame);
 
           // Re-synchronize the header timestamps since we cache the camera calibration message
@@ -1163,6 +1180,23 @@ void K4AROSDevice::framePublisherThread()
 
           rgb_raw_frame->header.stamp = capture_time;
           rgb_raw_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
+
+          rclcpp::Time current_time = this->get_clock()->now();
+
+          // Print timestamp before publishing
+          RCLCPP_INFO(this->get_logger(), "RGB image timestamp: %f, Current time: %f",
+                      rgb_raw_frame->header.stamp.sec + rgb_raw_frame->header.stamp.nanosec * 1e-9,
+                      current_time.seconds());
+
+          // Check delay between message timestamp and current time
+          rclcpp::Duration delay = current_time - rgb_raw_frame->header.stamp;
+          double delay_seconds = delay.seconds();
+
+          if (delay_seconds > 0.8)
+          {
+            RCLCPP_WARN(this->get_logger(), "RGB image delay exceeds 0.8s: %.3f seconds", delay_seconds);
+          }
+
           rgb_raw_publisher_->publish(std::move(rgb_raw_frame));
 
           // Re-synchronize the header timestamps since we cache the camera calibration message
@@ -1265,7 +1299,7 @@ void K4AROSDevice::bodyPublisherThread()
       else
       {
         auto capture_time = timestampToROS(body_frame.get_device_timestamp());
-        
+
         if (this->count_subscribers("body_tracking_data") > 0)
         {
           // Joint marker array

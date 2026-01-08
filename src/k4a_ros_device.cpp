@@ -79,6 +79,7 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   this->declare_parameter("imu_rate_target", rclcpp::ParameterValue(0));
   this->declare_parameter("wired_sync_mode", rclcpp::ParameterValue(0));
   this->declare_parameter("subordinate_delay_off_master_usec", rclcpp::ParameterValue(0));
+  this->declare_parameter("reset_device_interval", rclcpp::ParameterValue(0));
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \

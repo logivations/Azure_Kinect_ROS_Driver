@@ -482,6 +482,12 @@ bool K4AROSDevice::recreateDevice()
 {
   RCLCPP_WARN(this->get_logger(), "Attempting to recreate K4A device...");
 
+  // Signal other threads to pause device access
+  device_recreating_ = true;
+
+  // Give other threads time to see the flag and stop accessing the device
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
   // Stop and close the current device
   try
   {
@@ -519,6 +525,7 @@ bool K4AROSDevice::recreateDevice()
   if (k4a_device_count == 0)
   {
     RCLCPP_ERROR(this->get_logger(), "No K4A devices found during recreation");
+    device_recreating_ = false;
     return false;
   }
 
@@ -553,6 +560,7 @@ bool K4AROSDevice::recreateDevice()
   if (!k4a_device_)
   {
     RCLCPP_ERROR(this->get_logger(), "Failed to reopen K4A device");
+    device_recreating_ = false;
     return false;
   }
 
@@ -564,6 +572,7 @@ bool K4AROSDevice::recreateDevice()
   if (result != K4A_RESULT_SUCCEEDED)
   {
     RCLCPP_ERROR(this->get_logger(), "Failed to generate device configuration during recreation");
+    device_recreating_ = false;
     return false;
   }
 
@@ -579,24 +588,26 @@ bool K4AROSDevice::recreateDevice()
   catch (const std::exception& e)
   {
     RCLCPP_ERROR(this->get_logger(), "Failed to restart cameras: %s", e.what());
+    device_recreating_ = false;
     return false;
   }
 
-  // Restart IMU if it was enabled
-  if (params_.imu_rate_target > 0)
+  // Restart IMU
+  try
   {
-    try
-    {
-      k4a_device_.start_imu();
-      RCLCPP_INFO(this->get_logger(), "IMU restarted successfully");
-    }
-    catch (const std::exception& e)
-    {
-      RCLCPP_WARN(this->get_logger(), "Failed to restart IMU: %s", e.what());
-    }
+    k4a_device_.start_imu();
+    RCLCPP_INFO(this->get_logger(), "IMU restarted successfully");
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_WARN(this->get_logger(), "Failed to restart IMU: %s", e.what());
   }
 
   RCLCPP_INFO(this->get_logger(), "K4A device recreation completed successfully");
+
+  // Signal other threads that device is ready
+  device_recreating_ = false;
+
   return true;
 }
 
@@ -1518,6 +1529,13 @@ void K4AROSDevice::imuPublisherThread()
 
   while (running_ && rclcpp::ok())
   {
+    // Skip device access during recreation
+    if (device_recreating_)
+    {
+      loop_rate.sleep();
+      continue;
+    }
+
     if (k4a_device_)
     {
       // IMU messages are delivered in batches at 300 Hz. Drain the queue of IMU messages by

@@ -80,6 +80,9 @@
               int, 0)                                                                                                  \
   LIST_ENTRY(subordinate_delay_off_master_usec,                                                                        \
               "Delay subordinate camera off master camera by specified amount in usec.",                               \
+              int, 0)                                                                                                  \
+  LIST_ENTRY(reset_device_interval,                                                                                    \
+              "Interval in seconds to periodically reset and recreate the device. Set to 0 to disable.",               \
               int, 0)
 
 class K4AROSDeviceParams : public rclcpp::Node

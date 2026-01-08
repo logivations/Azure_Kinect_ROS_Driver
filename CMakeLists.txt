@@ -41,13 +41,14 @@ find_package(diagnostic_msgs REQUIRED)
 ###########
 
 
-add_library(${PROJECT_NAME}_node SHARED 
+## Shared library for composition support
+add_library(${PROJECT_NAME}_component SHARED
   src/k4a_ros_device.cpp
   src/k4a_ros_device_params.cpp
   src/k4a_calibration_transform_data.cpp)
 
-ament_target_dependencies(${PROJECT_NAME}_node rclcpp 
-  std_msgs 
+ament_target_dependencies(${PROJECT_NAME}_component rclcpp
+  std_msgs
   sensor_msgs
   visualization_msgs
   diagnostic_msgs
@@ -59,6 +60,12 @@ ament_target_dependencies(${PROJECT_NAME}_node rclcpp
   rclcpp_components
   cv_bridge
   angles)
+
+## Standalone executable
+add_executable(${PROJECT_NAME}_node
+  src/k4a_ros_bridge_node.cpp)
+
+ament_target_dependencies(${PROJECT_NAME}_node rclcpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -90,7 +97,7 @@ find_package(k4abt 1.0.0 QUIET MODULE)
 if (k4abt_FOUND)
   list(APPEND K4A_LIBS k4abt::k4abt)
   message(STATUS "Body Tracking SDK found: compiling support for Body Tracking")
-  target_compile_definitions(${PROJECT_NAME}_node PUBLIC K4A_BODY_TRACKING)
+  target_compile_definitions(${PROJECT_NAME}_component PUBLIC K4A_BODY_TRACKING)
 else()
   message("!!! Body Tracking SDK not found: body tracking features will not be available !!!")
 endif()
@@ -104,11 +111,16 @@ include(Installk4a)
 ##################################
 include_directories(include)
 
-target_link_libraries(${PROJECT_NAME}_node
+target_link_libraries(${PROJECT_NAME}_component
   ${K4A_LIBS}
 )
 
-rclcpp_components_register_nodes(${PROJECT_NAME}_node "K4AROSDevice")
+# Link standalone executable to the component library
+target_link_libraries(${PROJECT_NAME}_node
+  ${PROJECT_NAME}_component
+)
+
+rclcpp_components_register_nodes(${PROJECT_NAME}_component "K4AROSDevice")
 
 #############
 ## Install ##
@@ -118,10 +130,15 @@ rclcpp_components_register_nodes(${PROJECT_NAME}_node "K4AROSDevice")
 # See http://ros.org/doc/api/catkin/html/adv_user_guide/variables.html
 
 ## Mark executables and/or libraries for installation
-install(TARGETS ${PROJECT_NAME}_node
+install(TARGETS ${PROJECT_NAME}_component
   LIBRARY DESTINATION lib
 )
-ament_export_libraries(${library_name}) 
+
+install(TARGETS ${PROJECT_NAME}_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+ament_export_libraries(${PROJECT_NAME}_component) 
 
 message("Added libs")
 

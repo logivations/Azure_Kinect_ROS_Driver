@@ -97,6 +97,9 @@ class K4AROSDevice : public rclcpp::Node
 #endif
   void imuPublisherThread();
 
+  // Recreate the K4A device after poll failures
+  bool recreateDevice();
+
   // Gets a timestap from one of the captures images
   std::chrono::microseconds getCaptureTimestamp(const k4a::capture& capture);
 
@@ -171,7 +174,13 @@ class K4AROSDevice : public rclcpp::Node
   // Thread control
   volatile bool running_;
 
+  // Flag to signal device recreation is in progress (other threads should pause)
+  std::atomic_bool device_recreating_{false};
+
   int count_not_get_capture_{0};
+
+  // Timestamp of last device reset for periodic reset feature
+  std::chrono::steady_clock::time_point last_device_reset_time_;
 
   // Last capture timestamp for synchronizing playback capture and imu thread
   std::atomic_uint64_t last_capture_time_usec_;

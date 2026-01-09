@@ -10,6 +10,7 @@
 #include <thread>
 #include <iomanip>
 #include <unordered_map>
+#include <cstdlib>
 
 // Library headers
 //
@@ -78,6 +79,7 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   this->declare_parameter("imu_rate_target", rclcpp::ParameterValue(0));
   this->declare_parameter("wired_sync_mode", rclcpp::ParameterValue(0));
   this->declare_parameter("subordinate_delay_off_master_usec", rclcpp::ParameterValue(0));
+  this->declare_parameter("reset_device_interval", rclcpp::ParameterValue(0));
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -428,6 +430,9 @@ k4a_result_t K4AROSDevice::startCameras()
   // Prevent the worker thread from exiting immediately
   running_ = true;
 
+  // Initialize the last device reset time for periodic reset feature
+  last_device_reset_time_ = std::chrono::steady_clock::now();
+
   // Start the thread that will update diagnostics
   update_diagnostics_thread_ = thread(&K4AROSDevice::startDiagnosticsUpdaterThread, this);
 
@@ -471,6 +476,139 @@ void K4AROSDevice::stopImu()
   {
     k4a_device_.stop_imu();
   }
+}
+
+bool K4AROSDevice::recreateDevice()
+{
+  RCLCPP_WARN(this->get_logger(), "Attempting to recreate K4A device...");
+
+  // Signal other threads to pause device access
+  device_recreating_ = true;
+
+  // Give other threads time to see the flag and stop accessing the device
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // Stop and close the current device
+  try
+  {
+    if (k4a_device_)
+    {
+      RCLCPP_INFO(this->get_logger(), "Stopping cameras on current device...");
+      k4a_device_.stop_cameras();
+      k4a_device_.stop_imu();
+      k4a_device_.close();
+      k4a_device_ = nullptr;
+    }
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_WARN(this->get_logger(), "Exception while closing device: %s", e.what());
+  }
+
+  // Reset the device using AzureKinectFirmwareTool
+  RCLCPP_INFO(this->get_logger(), "Resetting device using AzureKinectFirmwareTool...");
+  int reset_result = std::system("AzureKinectFirmwareTool -Reset");
+  if (reset_result == 0)
+  {
+    RCLCPP_INFO(this->get_logger(), "Device reset successful");
+  }
+  else
+  {
+    RCLCPP_WARN(this->get_logger(), "Device reset returned %d, continuing with device recreation...", reset_result);
+  }
+
+  // Wait for the device to re-enumerate after reset
+  std::this_thread::sleep_for(std::chrono::seconds(3));
+
+  // Try to reopen the device
+  uint32_t k4a_device_count = k4a::device::get_installed_count();
+  if (k4a_device_count == 0)
+  {
+    RCLCPP_ERROR(this->get_logger(), "No K4A devices found during recreation");
+    device_recreating_ = false;
+    return false;
+  }
+
+  for (uint32_t i = 0; i < k4a_device_count; i++)
+  {
+    try
+    {
+      k4a::device device = k4a::device::open(i);
+
+      // Match by serial number if specified
+      if (params_.sensor_sn != "")
+      {
+        if (device.get_serialnum() == params_.sensor_sn)
+        {
+          k4a_device_ = std::move(device);
+          break;
+        }
+      }
+      else if (i == 0)
+      {
+        k4a_device_ = std::move(device);
+        break;
+      }
+    }
+    catch (const std::exception& e)
+    {
+      RCLCPP_ERROR(this->get_logger(), "Failed to open K4A device at index %d: %s", i, e.what());
+      continue;
+    }
+  }
+
+  if (!k4a_device_)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to reopen K4A device");
+    device_recreating_ = false;
+    return false;
+  }
+
+  RCLCPP_INFO(this->get_logger(), "K4A device reopened: %s", k4a_device_.get_serialnum().c_str());
+
+  // Restart the cameras with the same configuration
+  k4a_device_configuration_t k4a_configuration = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+  k4a_result_t result = params_.GetDeviceConfig(&k4a_configuration);
+  if (result != K4A_RESULT_SUCCEEDED)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to generate device configuration during recreation");
+    device_recreating_ = false;
+    return false;
+  }
+
+  // Reinitialize calibration data
+  calibration_data_.initialize(k4a_device_, k4a_configuration.depth_mode, k4a_configuration.color_resolution, params_);
+
+  // Start cameras
+  try
+  {
+    k4a_device_.start_cameras(&k4a_configuration);
+    RCLCPP_INFO(this->get_logger(), "Cameras restarted successfully");
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to restart cameras: %s", e.what());
+    device_recreating_ = false;
+    return false;
+  }
+
+  // Restart IMU
+  try
+  {
+    k4a_device_.start_imu();
+    RCLCPP_INFO(this->get_logger(), "IMU restarted successfully");
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_WARN(this->get_logger(), "Failed to restart IMU: %s", e.what());
+  }
+
+  RCLCPP_INFO(this->get_logger(), "K4A device recreation completed successfully");
+
+  // Signal other threads that device is ready
+  device_recreating_ = false;
+
+  return true;
 }
 
 k4a_result_t K4AROSDevice::getDepthFrame(const k4a::capture& capture, sensor_msgs::msg::Image::UniquePtr& depth_image,
@@ -941,13 +1079,50 @@ void K4AROSDevice::framePublisherThread()
   {
     if (k4a_device_)
     {
+      // Check for periodic device reset
+      if (params_.reset_device_interval > 0)
+      {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_device_reset_time_).count();
+        if (elapsed >= params_.reset_device_interval)
+        {
+          RCLCPP_INFO(this->get_logger(), "Periodic device reset triggered after %ld seconds", elapsed);
+          if (recreateDevice())
+          {
+            RCLCPP_INFO(this->get_logger(), "Periodic device reset completed successfully");
+            last_device_reset_time_ = std::chrono::steady_clock::now();
+            count_not_get_capture_ = 0;
+            waitTime = firstFrameWaitTime;
+            continue;  // Continue to next iteration with new device
+          }
+          else
+          {
+            RCLCPP_FATAL(this->get_logger(), "Periodic device reset failed: aborting...");
+            rclcpp::shutdown();
+            return;
+          }
+        }
+      }
+
       while (!k4a_device_.get_capture(&capture, waitTime))
       {
         if (count_not_get_capture_ > 10)
         {
-          RCLCPP_FATAL(this->get_logger(),"Failed to poll cameras: aborting...");
-          rclcpp::shutdown();
-          return;
+          RCLCPP_WARN(this->get_logger(), "Failed to poll cameras after %d attempts, attempting to recreate device...", count_not_get_capture_);
+          if (recreateDevice())
+          {
+            RCLCPP_INFO(this->get_logger(), "Device recreated successfully, resuming capture...");
+            last_device_reset_time_ = std::chrono::steady_clock::now();
+            count_not_get_capture_ = 0;
+            waitTime = firstFrameWaitTime;
+            break;  // Break inner while to retry capture with new device
+          }
+          else
+          {
+            RCLCPP_FATAL(this->get_logger(), "Failed to recreate device: aborting...");
+            rclcpp::shutdown();
+            return;
+          }
         }
         RCLCPP_ERROR(this->get_logger(),"Failed to poll cameras: trying again...");
         count_not_get_capture_++;
@@ -1354,6 +1529,13 @@ void K4AROSDevice::imuPublisherThread()
 
   while (running_ && rclcpp::ok())
   {
+    // Skip device access during recreation
+    if (device_recreating_)
+    {
+      loop_rate.sleep();
+      continue;
+    }
+
     if (k4a_device_)
     {
       // IMU messages are delivered in batches at 300 Hz. Drain the queue of IMU messages by

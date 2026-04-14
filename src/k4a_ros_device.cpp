@@ -10,6 +10,7 @@
 #include <thread>
 #include <iomanip>
 #include <unordered_map>
+#include <cstdlib>
 
 // Library headers
 //
@@ -78,6 +79,9 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   this->declare_parameter("imu_rate_target", rclcpp::ParameterValue(0));
   this->declare_parameter("wired_sync_mode", rclcpp::ParameterValue(0));
   this->declare_parameter("subordinate_delay_off_master_usec", rclcpp::ParameterValue(0));
+  this->declare_parameter("reset_device_interval", rclcpp::ParameterValue(0));
+  this->declare_parameter("point_cloud_downsample_factor", rclcpp::ParameterValue(1));
+  this->declare_parameter("point_cloud_max_range", rclcpp::ParameterValue(0.0f));
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -238,6 +242,10 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   }
 
   // Register our topics
+    rclcpp::QoS custom_qos(KeepLast(1), rmw_qos_profile_sensor_data);
+    rclcpp::PublisherOptions sub_options;
+    sub_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
+
   if (params_.color_format == "jpeg")
   {
     // JPEG images are directly published on 'rgb/image_raw/compressed' so that
@@ -248,20 +256,17 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   }
   else if (params_.color_format == "bgra")
   {
-    rgb_raw_publisher_ = image_transport_->advertise("rgb/image_raw", 1, true);
+    rgb_raw_publisher_ = this->create_publisher<Image>("rgb/image_raw", custom_qos, sub_options);
   }
   rgb_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("rgb/camera_info", 1);
 
-  depth_raw_publisher_ = image_transport_->advertise("depth/image_raw", 1, true);
+  depth_raw_publisher_ = this->create_publisher<Image>(depth_raw_topic, custom_qos, sub_options);
   depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
 
-  depth_raw_publisher_ = image_transport_->advertise(depth_raw_topic, 1, true);
-  depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
-
-  depth_rect_publisher_ = image_transport_->advertise(depth_rect_topic, 1, true);
+  depth_rect_publisher_ = this->create_publisher<Image>(depth_rect_topic, custom_qos, sub_options);
   depth_rect_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth_to_rgb/camera_info", 1);
 
-  rgb_rect_publisher_ = image_transport_->advertise("rgb_to_depth/image_raw", 1, true);
+  rgb_rect_publisher_ = this->create_publisher<Image>("rgb_to_depth/image_raw", custom_qos, sub_options);
   rgb_rect_camerainfo_publisher_ = this->create_publisher<CameraInfo>("rgb_to_depth/camera_info", 1);
 
   ir_raw_publisher_ = image_transport_->advertise("ir/image_raw", 1, true);
@@ -270,10 +275,7 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   imu_orientation_publisher_ = this->create_publisher<Imu>("imu", 200);
 
   if (params_.point_cloud || params_.rgb_point_cloud) {
-    rclcpp::QoS custom_qos(KeepLast(1), rmw_qos_profile_sensor_data);
-    rclcpp::PublisherOptions options;
-    options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
-    pointcloud_publisher_ = this->create_publisher<PointCloud2>("points2", custom_qos, options);
+    pointcloud_publisher_ = this->create_publisher<PointCloud2>("points2", custom_qos, sub_options);
   }
 
 #if defined(K4A_BODY_TRACKING)
@@ -430,6 +432,9 @@ k4a_result_t K4AROSDevice::startCameras()
   // Prevent the worker thread from exiting immediately
   running_ = true;
 
+  // Initialize the last device reset time for periodic reset feature
+  last_device_reset_time_ = std::chrono::steady_clock::now();
+
   // Start the thread that will update diagnostics
   update_diagnostics_thread_ = thread(&K4AROSDevice::startDiagnosticsUpdaterThread, this);
 
@@ -475,7 +480,140 @@ void K4AROSDevice::stopImu()
   }
 }
 
-k4a_result_t K4AROSDevice::getDepthFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::Image>& depth_image,
+bool K4AROSDevice::recreateDevice()
+{
+  RCLCPP_WARN(this->get_logger(), "Attempting to recreate K4A device...");
+
+  // Signal other threads to pause device access
+  device_recreating_ = true;
+
+  // Give other threads time to see the flag and stop accessing the device
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // Stop and close the current device
+  try
+  {
+    if (k4a_device_)
+    {
+      RCLCPP_INFO(this->get_logger(), "Stopping cameras on current device...");
+      k4a_device_.stop_cameras();
+      k4a_device_.stop_imu();
+      k4a_device_.close();
+      k4a_device_ = nullptr;
+    }
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_WARN(this->get_logger(), "Exception while closing device: %s", e.what());
+  }
+
+  // Reset the device using AzureKinectFirmwareTool
+  RCLCPP_INFO(this->get_logger(), "Resetting device using AzureKinectFirmwareTool...");
+  int reset_result = std::system("AzureKinectFirmwareTool -Reset");
+  if (reset_result == 0)
+  {
+    RCLCPP_INFO(this->get_logger(), "Device reset successful");
+  }
+  else
+  {
+    RCLCPP_WARN(this->get_logger(), "Device reset returned %d, continuing with device recreation...", reset_result);
+  }
+
+  // Wait for the device to re-enumerate after reset
+  std::this_thread::sleep_for(std::chrono::seconds(3));
+
+  // Try to reopen the device
+  uint32_t k4a_device_count = k4a::device::get_installed_count();
+  if (k4a_device_count == 0)
+  {
+    RCLCPP_ERROR(this->get_logger(), "No K4A devices found during recreation");
+    device_recreating_ = false;
+    return false;
+  }
+
+  for (uint32_t i = 0; i < k4a_device_count; i++)
+  {
+    try
+    {
+      k4a::device device = k4a::device::open(i);
+
+      // Match by serial number if specified
+      if (params_.sensor_sn != "")
+      {
+        if (device.get_serialnum() == params_.sensor_sn)
+        {
+          k4a_device_ = std::move(device);
+          break;
+        }
+      }
+      else if (i == 0)
+      {
+        k4a_device_ = std::move(device);
+        break;
+      }
+    }
+    catch (const std::exception& e)
+    {
+      RCLCPP_ERROR(this->get_logger(), "Failed to open K4A device at index %d: %s", i, e.what());
+      continue;
+    }
+  }
+
+  if (!k4a_device_)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to reopen K4A device");
+    device_recreating_ = false;
+    return false;
+  }
+
+  RCLCPP_INFO(this->get_logger(), "K4A device reopened: %s", k4a_device_.get_serialnum().c_str());
+
+  // Restart the cameras with the same configuration
+  k4a_device_configuration_t k4a_configuration = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+  k4a_result_t result = params_.GetDeviceConfig(&k4a_configuration);
+  if (result != K4A_RESULT_SUCCEEDED)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to generate device configuration during recreation");
+    device_recreating_ = false;
+    return false;
+  }
+
+  // Reinitialize calibration data
+  calibration_data_.initialize(k4a_device_, k4a_configuration.depth_mode, k4a_configuration.color_resolution, params_);
+
+  // Start cameras
+  try
+  {
+    k4a_device_.start_cameras(&k4a_configuration);
+    RCLCPP_INFO(this->get_logger(), "Cameras restarted successfully");
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_ERROR(this->get_logger(), "Failed to restart cameras: %s", e.what());
+    device_recreating_ = false;
+    return false;
+  }
+
+  // Restart IMU
+  try
+  {
+    k4a_device_.start_imu();
+    RCLCPP_INFO(this->get_logger(), "IMU restarted successfully");
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_WARN(this->get_logger(), "Failed to restart IMU: %s", e.what());
+  }
+
+  RCLCPP_INFO(this->get_logger(), "K4A device recreation completed successfully");
+
+  // Signal other threads that device is ready
+  device_recreating_ = false;
+
+  return true;
+}
+
+k4a_result_t K4AROSDevice::getDepthFrame(const k4a::capture& capture, sensor_msgs::msg::Image::UniquePtr& depth_image,
                                           bool rectified = false)
 {
   k4a::image k4a_depth_frame = capture.get_depth_image();
@@ -497,7 +635,7 @@ k4a_result_t K4AROSDevice::getDepthFrame(const k4a::capture& capture, std::share
   return renderDepthToROS(depth_image, k4a_depth_frame);
 }
 
-k4a_result_t K4AROSDevice::renderDepthToROS(std::shared_ptr<sensor_msgs::msg::Image>& depth_image, k4a::image& k4a_depth_frame)
+k4a_result_t K4AROSDevice::renderDepthToROS(sensor_msgs::msg::Image::UniquePtr& depth_image, k4a::image& k4a_depth_frame)
 {
   cv::Mat depth_frame_buffer_mat(k4a_depth_frame.get_height_pixels(), k4a_depth_frame.get_width_pixels(), CV_16UC1,
                                  k4a_depth_frame.get_buffer());
@@ -517,9 +655,9 @@ k4a_result_t K4AROSDevice::renderDepthToROS(std::shared_ptr<sensor_msgs::msg::Im
     return K4A_RESULT_FAILED;
   }
 
-  depth_image =
-      cv_bridge::CvImage(std_msgs::msg::Header(), encoding, depth_frame_buffer_mat).toImageMsg();
-
+depth_image = std::make_unique<sensor_msgs::msg::Image>(
+      *cv_bridge::CvImage(std_msgs::msg::Header(), encoding, depth_frame_buffer_mat).toImageMsg()
+  );
   return K4A_RESULT_SUCCEEDED;
 }
 
@@ -574,7 +712,7 @@ k4a_result_t K4AROSDevice::getJpegRgbFrame(const k4a::capture& capture, std::sha
   return K4A_RESULT_SUCCEEDED;
 }
 
-k4a_result_t K4AROSDevice::getRbgFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::Image>& rgb_image,
+k4a_result_t K4AROSDevice::getRbgFrame(const k4a::capture& capture, sensor_msgs::msg::Image::UniquePtr& rgb_image,
                                        bool rectified = false)
 {
   k4a::image k4a_bgra_frame = capture.get_color_image();
@@ -607,17 +745,18 @@ k4a_result_t K4AROSDevice::getRbgFrame(const k4a::capture& capture, std::shared_
   return renderBGRA32ToROS(rgb_image, k4a_bgra_frame);
 }
 
-// Helper function that renders any BGRA K4A frame to a ROS ImagePtr. Useful for rendering intermediary frames
-// during debugging of image processing functions
-k4a_result_t K4AROSDevice::renderBGRA32ToROS(std::shared_ptr<sensor_msgs::msg::Image>& rgb_image, k4a::image& k4a_bgra_frame)
+k4a_result_t K4AROSDevice::renderBGRA32ToROS(sensor_msgs::msg::Image::UniquePtr& rgb_image, k4a::image& k4a_bgra_frame)
 {
   cv::Mat rgb_buffer_mat(k4a_bgra_frame.get_height_pixels(), k4a_bgra_frame.get_width_pixels(), CV_8UC4,
                          k4a_bgra_frame.get_buffer());
 
-  rgb_image = cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::BGRA8, rgb_buffer_mat).toImageMsg();
+  rgb_image = std::make_unique<sensor_msgs::msg::Image>(
+      *cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::BGRA8, rgb_buffer_mat).toImageMsg()
+  );
 
   return K4A_RESULT_SUCCEEDED;
 }
+
 
 k4a_result_t K4AROSDevice::getRgbPointCloudInDepthFrame(const k4a::capture& capture,
                                                         sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
@@ -705,18 +844,30 @@ k4a_result_t K4AROSDevice::getPointCloud(const k4a::capture& capture, sensor_msg
 k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
                                                sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
-  point_cloud->height = pointcloud_image.get_height_pixels();
-  point_cloud->width = pointcloud_image.get_width_pixels();
-  point_cloud->is_dense = false;
-  point_cloud->is_bigendian = false;
+  const int src_width = pointcloud_image.get_width_pixels();
+  const int src_height = pointcloud_image.get_height_pixels();
 
-  const size_t point_count = pointcloud_image.get_height_pixels() * pointcloud_image.get_width_pixels();
+  const size_t point_count = static_cast<size_t>(src_width) * src_height;
   const size_t pixel_count = color_image.get_size() / sizeof(BgraPixel);
   if (point_count != pixel_count)
   {
     RCLCPP_WARN(this->get_logger(),"Color and depth image sizes do not match!");
     return K4A_RESULT_FAILED;
   }
+
+  const int ds = std::max(1, params_.point_cloud_downsample_factor);
+  const int new_width = src_width / ds;
+  const int new_height = src_height / ds;
+
+  // Max range: compare in millimeters against the raw int16 buffer to avoid unnecessary float conversion
+  const int16_t max_range_mm = (params_.point_cloud_max_range > 0.0f)
+      ? static_cast<int16_t>(std::min(params_.point_cloud_max_range * 1000.0f, static_cast<float>(INT16_MAX)))
+      : 0;
+
+  point_cloud->height = new_height;
+  point_cloud->width = new_width;
+  point_cloud->is_dense = false;
+  point_cloud->is_bigendian = false;
 
   sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
   pcd_modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
@@ -729,32 +880,36 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_imag
   sensor_msgs::PointCloud2Iterator<uint8_t> iter_g(*point_cloud, "g");
   sensor_msgs::PointCloud2Iterator<uint8_t> iter_b(*point_cloud, "b");
 
-  pcd_modifier.resize(point_count);
+  pcd_modifier.resize(static_cast<size_t>(new_width) * new_height);
 
   const int16_t* point_cloud_buffer = reinterpret_cast<const int16_t*>(pointcloud_image.get_buffer());
   const uint8_t* color_buffer = color_image.get_buffer();
 
-  for (size_t i = 0; i < point_count; i++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
+  for (int row = 0; row < new_height; row++)
   {
-    // Z in image frame:
-    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
-    // Alpha value:
-    uint8_t a = color_buffer[4 * i + 3];
-    if (z <= 0.0f || a == 0)
+    for (int col = 0; col < new_width; col++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
     {
-      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
-      *iter_r = *iter_g = *iter_b = 0;
-    }
-    else
-    {
-      constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
-      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
-      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
-      *iter_z = kMillimeterToMeter * z;
+      const size_t i = static_cast<size_t>(row * ds) * src_width + col * ds;
+      // Z in image frame:
+      int16_t z_raw = point_cloud_buffer[3 * i + 2];
+      // Alpha value:
+      uint8_t a = color_buffer[4 * i + 3];
+      if (z_raw <= 0 || a == 0 || (max_range_mm > 0 && z_raw > max_range_mm))
+      {
+        *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
+        *iter_r = *iter_g = *iter_b = 0;
+      }
+      else
+      {
+        constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
+        *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
+        *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
+        *iter_z = kMillimeterToMeter * static_cast<float>(z_raw);
 
-      *iter_r = color_buffer[4 * i + 2];
-      *iter_g = color_buffer[4 * i + 1];
-      *iter_b = color_buffer[4 * i + 0];
+        *iter_r = color_buffer[4 * i + 2];
+        *iter_g = color_buffer[4 * i + 1];
+        *iter_b = color_buffer[4 * i + 0];
+      }
     }
   }
 
@@ -763,12 +918,22 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_imag
 
 k4a_result_t K4AROSDevice::fillPointCloud(const k4a::image& pointcloud_image, sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
-  point_cloud->height = pointcloud_image.get_height_pixels();
-  point_cloud->width = pointcloud_image.get_width_pixels();
+  const int src_width = pointcloud_image.get_width_pixels();
+  const int src_height = pointcloud_image.get_height_pixels();
+
+  const int ds = std::max(1, params_.point_cloud_downsample_factor);
+  const int new_width = src_width / ds;
+  const int new_height = src_height / ds;
+
+  // Max range: compare in millimeters against the raw int16 buffer to avoid unnecessary float conversion
+  const int16_t max_range_mm = (params_.point_cloud_max_range > 0.0f)
+      ? static_cast<int16_t>(std::min(params_.point_cloud_max_range * 1000.0f, static_cast<float>(INT16_MAX)))
+      : 0;
+
+  point_cloud->height = new_height;
+  point_cloud->width = new_width;
   point_cloud->is_dense = false;
   point_cloud->is_bigendian = false;
-
-  const size_t point_count = pointcloud_image.get_height_pixels() * pointcloud_image.get_width_pixels();
 
   sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
   pcd_modifier.setPointCloud2FieldsByString(1, "xyz");
@@ -777,24 +942,28 @@ k4a_result_t K4AROSDevice::fillPointCloud(const k4a::image& pointcloud_image, se
   sensor_msgs::PointCloud2Iterator<float> iter_y(*point_cloud, "y");
   sensor_msgs::PointCloud2Iterator<float> iter_z(*point_cloud, "z");
 
-  pcd_modifier.resize(point_count);
+  pcd_modifier.resize(static_cast<size_t>(new_width) * new_height);
 
   const int16_t* point_cloud_buffer = reinterpret_cast<const int16_t*>(pointcloud_image.get_buffer());
 
-  for (size_t i = 0; i < point_count; i++, ++iter_x, ++iter_y, ++iter_z)
+  for (int row = 0; row < new_height; row++)
   {
-    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
+    for (int col = 0; col < new_width; col++, ++iter_x, ++iter_y, ++iter_z)
+    {
+      const size_t i = static_cast<size_t>(row * ds) * src_width + col * ds;
+      int16_t z_raw = point_cloud_buffer[3 * i + 2];
 
-    if (z <= 0.0f)
-    {
-      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
-    }
-    else
-    {
-      constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
-      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
-      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
-      *iter_z = kMillimeterToMeter * z;
+      if (z_raw <= 0 || (max_range_mm > 0 && z_raw > max_range_mm))
+      {
+        *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
+      }
+      else
+      {
+        constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
+        *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
+        *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
+        *iter_z = kMillimeterToMeter * z_raw;
+      }
     }
   }
 
@@ -942,13 +1111,50 @@ void K4AROSDevice::framePublisherThread()
   {
     if (k4a_device_)
     {
+      // Check for periodic device reset
+      if (params_.reset_device_interval > 0)
+      {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_device_reset_time_).count();
+        if (elapsed >= params_.reset_device_interval)
+        {
+          RCLCPP_INFO(this->get_logger(), "Periodic device reset triggered after %ld seconds", elapsed);
+          if (recreateDevice())
+          {
+            RCLCPP_INFO(this->get_logger(), "Periodic device reset completed successfully");
+            last_device_reset_time_ = std::chrono::steady_clock::now();
+            count_not_get_capture_ = 0;
+            waitTime = firstFrameWaitTime;
+            continue;  // Continue to next iteration with new device
+          }
+          else
+          {
+            RCLCPP_FATAL(this->get_logger(), "Periodic device reset failed: aborting...");
+            rclcpp::shutdown();
+            return;
+          }
+        }
+      }
+
       while (!k4a_device_.get_capture(&capture, waitTime))
       {
         if (count_not_get_capture_ > 10)
         {
-          RCLCPP_FATAL(this->get_logger(),"Failed to poll cameras: aborting...");
-          rclcpp::shutdown();
-          return;
+          RCLCPP_WARN(this->get_logger(), "Failed to poll cameras after %d attempts, attempting to recreate device...", count_not_get_capture_);
+          if (recreateDevice())
+          {
+            RCLCPP_INFO(this->get_logger(), "Device recreated successfully, resuming capture...");
+            last_device_reset_time_ = std::chrono::steady_clock::now();
+            count_not_get_capture_ = 0;
+            waitTime = firstFrameWaitTime;
+            break;  // Break inner while to retry capture with new device
+          }
+          else
+          {
+            RCLCPP_FATAL(this->get_logger(), "Failed to recreate device: aborting...");
+            rclcpp::shutdown();
+            return;
+          }
         }
         RCLCPP_ERROR(this->get_logger(),"Failed to poll cameras: trying again...");
         count_not_get_capture_++;
@@ -994,10 +1200,10 @@ void K4AROSDevice::framePublisherThread()
     }
 
     CompressedImage::SharedPtr rgb_jpeg_frame(new CompressedImage);
-    Image::SharedPtr rgb_raw_frame(new Image);
-    Image::SharedPtr rgb_rect_frame(new Image);
-    Image::SharedPtr depth_raw_frame(new Image);
-    Image::SharedPtr depth_rect_frame(new Image);
+    Image::UniquePtr rgb_raw_frame = std::make_unique<Image>();
+    Image::UniquePtr rgb_rect_frame = std::make_unique<Image>();
+    Image::UniquePtr depth_raw_frame = std::make_unique<Image>();
+    Image::UniquePtr depth_rect_frame = std::make_unique<Image>();
     Image::SharedPtr ir_raw_frame(new Image);
     PointCloud2::UniquePtr point_cloud = std::make_unique<PointCloud2>();
 
@@ -1060,7 +1266,7 @@ void K4AROSDevice::framePublisherThread()
             depth_raw_frame->header.stamp = capture_time;
             depth_raw_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_;
 
-            depth_raw_publisher_.publish(depth_raw_frame);
+            depth_raw_publisher_->publish(std::move(depth_raw_frame));
             depth_raw_camerainfo_publisher_->publish(depth_raw_camera_info);
           }
         }
@@ -1089,7 +1295,7 @@ void K4AROSDevice::framePublisherThread()
 
             depth_rect_frame->header.stamp = capture_time;
             depth_rect_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
-            depth_rect_publisher_.publish(depth_rect_frame);
+            depth_rect_publisher_->publish(std::move(depth_rect_frame));
 
             // Re-synchronize the header timestamps since we cache the camera calibration message
             depth_rect_camera_info.header.stamp = capture_time;
@@ -1164,7 +1370,7 @@ void K4AROSDevice::framePublisherThread()
 
           rgb_raw_frame->header.stamp = capture_time;
           rgb_raw_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
-          rgb_raw_publisher_.publish(rgb_raw_frame);
+          rgb_raw_publisher_->publish(std::move(rgb_raw_frame));
 
           // Re-synchronize the header timestamps since we cache the camera calibration message
           rgb_raw_camera_info.header.stamp = capture_time;
@@ -1192,7 +1398,7 @@ void K4AROSDevice::framePublisherThread()
 
           rgb_rect_frame->header.stamp = capture_time;
           rgb_rect_frame->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_;
-          rgb_rect_publisher_.publish(rgb_rect_frame);
+          rgb_rect_publisher_->publish(std::move(rgb_rect_frame));
 
           // Re-synchronize the header timestamps since we cache the camera calibration message
           rgb_rect_camera_info.header.stamp = capture_time;
@@ -1355,6 +1561,13 @@ void K4AROSDevice::imuPublisherThread()
 
   while (running_ && rclcpp::ok())
   {
+    // Skip device access during recreation
+    if (device_recreating_)
+    {
+      loop_rate.sleep();
+      continue;
+    }
+
     if (k4a_device_)
     {
       // IMU messages are delivered in batches at 300 Hz. Drain the queue of IMU messages by

@@ -57,7 +57,7 @@ class K4AROSDevice : public rclcpp::Node
 
   void getRgbCameraInfo(sensor_msgs::msg::CameraInfo& camera_info);
 
-  k4a_result_t getDepthFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::Image>& depth_frame, bool rectified);
+  k4a_result_t getDepthFrame(const k4a::capture& capture, sensor_msgs::msg::Image::UniquePtr& depth_frame, bool rectified);
 
   k4a_result_t getPointCloud(const k4a::capture& capture, sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud);
 
@@ -66,7 +66,7 @@ class K4AROSDevice : public rclcpp::Node
 
   k4a_result_t getImuFrame(const k4a_imu_sample_t& capture, std::shared_ptr<sensor_msgs::msg::Imu>& imu_frame);
 
-  k4a_result_t getRbgFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::Image>& rgb_frame, bool rectified);
+  k4a_result_t getRbgFrame(const k4a::capture& capture, sensor_msgs::msg::Image::UniquePtr& rgb_frame, bool rectified);
   k4a_result_t getJpegRgbFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::CompressedImage>& jpeg_image);
 
   k4a_result_t getIrFrame(const k4a::capture& capture, std::shared_ptr<sensor_msgs::msg::Image>& ir_image);
@@ -82,8 +82,8 @@ class K4AROSDevice : public rclcpp::Node
 #endif
 
  private:
-  k4a_result_t renderBGRA32ToROS(std::shared_ptr<sensor_msgs::msg::Image>& rgb_frame, k4a::image& k4a_bgra_frame);
-  k4a_result_t renderDepthToROS(std::shared_ptr<sensor_msgs::msg::Image>& depth_image, k4a::image& k4a_depth_frame);
+  k4a_result_t renderBGRA32ToROS(sensor_msgs::msg::Image::UniquePtr& rgb_image, k4a::image& k4a_bgra_frame);
+  k4a_result_t renderDepthToROS(sensor_msgs::msg::Image::UniquePtr& depth_image, k4a::image& k4a_depth_frame);
   k4a_result_t renderIrToROS(std::shared_ptr<sensor_msgs::msg::Image>& ir_image, k4a::image& k4a_ir_frame);
 
   k4a_result_t fillPointCloud(const k4a::image& pointcloud_image, sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud);
@@ -96,6 +96,9 @@ class K4AROSDevice : public rclcpp::Node
   void bodyPublisherThread();
 #endif
   void imuPublisherThread();
+
+  // Recreate the K4A device after poll failures
+  bool recreateDevice();
 
   // Gets a timestap from one of the captures images
   std::chrono::microseconds getCaptureTimestamp(const k4a::capture& capture);
@@ -121,17 +124,17 @@ class K4AROSDevice : public rclcpp::Node
   void printTimestampDebugMessage(const std::string& name, const rclcpp::Time& timestamp);
 
 
-  image_transport::Publisher rgb_raw_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rgb_raw_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr rgb_jpeg_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr rgb_raw_camerainfo_publisher_;
 
-  image_transport::Publisher depth_raw_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_raw_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr depth_raw_camerainfo_publisher_;
 
-  image_transport::Publisher depth_rect_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_rect_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr depth_rect_camerainfo_publisher_;
 
-  image_transport::Publisher rgb_rect_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rgb_rect_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr rgb_rect_camerainfo_publisher_;
 
   image_transport::Publisher ir_raw_publisher_;
@@ -171,7 +174,13 @@ class K4AROSDevice : public rclcpp::Node
   // Thread control
   volatile bool running_;
 
+  // Flag to signal device recreation is in progress (other threads should pause)
+  std::atomic_bool device_recreating_{false};
+
   int count_not_get_capture_{0};
+
+  // Timestamp of last device reset for periodic reset feature
+  std::chrono::steady_clock::time_point last_device_reset_time_;
 
   // Last capture timestamp for synchronizing playback capture and imu thread
   std::atomic_uint64_t last_capture_time_usec_;

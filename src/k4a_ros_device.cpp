@@ -80,6 +80,8 @@ K4AROSDevice::K4AROSDevice(const rclcpp::NodeOptions & options)
   this->declare_parameter("wired_sync_mode", rclcpp::ParameterValue(0));
   this->declare_parameter("subordinate_delay_off_master_usec", rclcpp::ParameterValue(0));
   this->declare_parameter("reset_device_interval", rclcpp::ParameterValue(0));
+  this->declare_parameter("point_cloud_downsample_factor", rclcpp::ParameterValue(1));
+  this->declare_parameter("point_cloud_max_range", rclcpp::ParameterValue(0.0f));
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
@@ -842,18 +844,30 @@ k4a_result_t K4AROSDevice::getPointCloud(const k4a::capture& capture, sensor_msg
 k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
                                                sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
-  point_cloud->height = pointcloud_image.get_height_pixels();
-  point_cloud->width = pointcloud_image.get_width_pixels();
-  point_cloud->is_dense = false;
-  point_cloud->is_bigendian = false;
+  const int src_width = pointcloud_image.get_width_pixels();
+  const int src_height = pointcloud_image.get_height_pixels();
 
-  const size_t point_count = pointcloud_image.get_height_pixels() * pointcloud_image.get_width_pixels();
+  const size_t point_count = static_cast<size_t>(src_width) * src_height;
   const size_t pixel_count = color_image.get_size() / sizeof(BgraPixel);
   if (point_count != pixel_count)
   {
     RCLCPP_WARN(this->get_logger(),"Color and depth image sizes do not match!");
     return K4A_RESULT_FAILED;
   }
+
+  const int ds = std::max(1, params_.point_cloud_downsample_factor);
+  const int new_width = src_width / ds;
+  const int new_height = src_height / ds;
+
+  // Max range: compare in millimeters against the raw int16 buffer to avoid unnecessary float conversion
+  const int16_t max_range_mm = (params_.point_cloud_max_range > 0.0f)
+      ? static_cast<int16_t>(std::min(params_.point_cloud_max_range * 1000.0f, static_cast<float>(INT16_MAX)))
+      : 0;
+
+  point_cloud->height = new_height;
+  point_cloud->width = new_width;
+  point_cloud->is_dense = false;
+  point_cloud->is_bigendian = false;
 
   sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
   pcd_modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
@@ -866,32 +880,36 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_imag
   sensor_msgs::PointCloud2Iterator<uint8_t> iter_g(*point_cloud, "g");
   sensor_msgs::PointCloud2Iterator<uint8_t> iter_b(*point_cloud, "b");
 
-  pcd_modifier.resize(point_count);
+  pcd_modifier.resize(static_cast<size_t>(new_width) * new_height);
 
   const int16_t* point_cloud_buffer = reinterpret_cast<const int16_t*>(pointcloud_image.get_buffer());
   const uint8_t* color_buffer = color_image.get_buffer();
 
-  for (size_t i = 0; i < point_count; i++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
+  for (int row = 0; row < new_height; row++)
   {
-    // Z in image frame:
-    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
-    // Alpha value:
-    uint8_t a = color_buffer[4 * i + 3];
-    if (z <= 0.0f || a == 0)
+    for (int col = 0; col < new_width; col++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
     {
-      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
-      *iter_r = *iter_g = *iter_b = 0;
-    }
-    else
-    {
-      constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
-      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
-      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
-      *iter_z = kMillimeterToMeter * z;
+      const size_t i = static_cast<size_t>(row * ds) * src_width + col * ds;
+      // Z in image frame:
+      int16_t z_raw = point_cloud_buffer[3 * i + 2];
+      // Alpha value:
+      uint8_t a = color_buffer[4 * i + 3];
+      if (z_raw <= 0 || a == 0 || (max_range_mm > 0 && z_raw > max_range_mm))
+      {
+        *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
+        *iter_r = *iter_g = *iter_b = 0;
+      }
+      else
+      {
+        constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
+        *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
+        *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
+        *iter_z = kMillimeterToMeter * static_cast<float>(z_raw);
 
-      *iter_r = color_buffer[4 * i + 2];
-      *iter_g = color_buffer[4 * i + 1];
-      *iter_b = color_buffer[4 * i + 0];
+        *iter_r = color_buffer[4 * i + 2];
+        *iter_g = color_buffer[4 * i + 1];
+        *iter_b = color_buffer[4 * i + 0];
+      }
     }
   }
 
@@ -900,12 +918,22 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(const k4a::image& pointcloud_imag
 
 k4a_result_t K4AROSDevice::fillPointCloud(const k4a::image& pointcloud_image, sensor_msgs::msg::PointCloud2::UniquePtr& point_cloud)
 {
-  point_cloud->height = pointcloud_image.get_height_pixels();
-  point_cloud->width = pointcloud_image.get_width_pixels();
+  const int src_width = pointcloud_image.get_width_pixels();
+  const int src_height = pointcloud_image.get_height_pixels();
+
+  const int ds = std::max(1, params_.point_cloud_downsample_factor);
+  const int new_width = src_width / ds;
+  const int new_height = src_height / ds;
+
+  // Max range: compare in millimeters against the raw int16 buffer to avoid unnecessary float conversion
+  const int16_t max_range_mm = (params_.point_cloud_max_range > 0.0f)
+      ? static_cast<int16_t>(std::min(params_.point_cloud_max_range * 1000.0f, static_cast<float>(INT16_MAX)))
+      : 0;
+
+  point_cloud->height = new_height;
+  point_cloud->width = new_width;
   point_cloud->is_dense = false;
   point_cloud->is_bigendian = false;
-
-  const size_t point_count = pointcloud_image.get_height_pixels() * pointcloud_image.get_width_pixels();
 
   sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
   pcd_modifier.setPointCloud2FieldsByString(1, "xyz");
@@ -914,24 +942,28 @@ k4a_result_t K4AROSDevice::fillPointCloud(const k4a::image& pointcloud_image, se
   sensor_msgs::PointCloud2Iterator<float> iter_y(*point_cloud, "y");
   sensor_msgs::PointCloud2Iterator<float> iter_z(*point_cloud, "z");
 
-  pcd_modifier.resize(point_count);
+  pcd_modifier.resize(static_cast<size_t>(new_width) * new_height);
 
   const int16_t* point_cloud_buffer = reinterpret_cast<const int16_t*>(pointcloud_image.get_buffer());
 
-  for (size_t i = 0; i < point_count; i++, ++iter_x, ++iter_y, ++iter_z)
+  for (int row = 0; row < new_height; row++)
   {
-    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
+    for (int col = 0; col < new_width; col++, ++iter_x, ++iter_y, ++iter_z)
+    {
+      const size_t i = static_cast<size_t>(row * ds) * src_width + col * ds;
+      int16_t z_raw = point_cloud_buffer[3 * i + 2];
 
-    if (z <= 0.0f)
-    {
-      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
-    }
-    else
-    {
-      constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
-      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
-      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
-      *iter_z = kMillimeterToMeter * z;
+      if (z_raw <= 0 || (max_range_mm > 0 && z_raw > max_range_mm))
+      {
+        *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
+      }
+      else
+      {
+        constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
+        *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
+        *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
+        *iter_z = kMillimeterToMeter * z_raw;
+      }
     }
   }
 

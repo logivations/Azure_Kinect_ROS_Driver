@@ -83,7 +83,15 @@
               int, 0)                                                                                                  \
   LIST_ENTRY(reset_device_interval,                                                                                    \
               "Interval in seconds to periodically reset and recreate the device. Set to 0 to disable.",               \
-              int, 0)
+              int, 0)                                                                                                  \
+  LIST_ENTRY(point_cloud_downsample_factor,                                                                            \
+             "Downsample factor for the point cloud. 1 = full resolution, 2 = half in each dimension (1/4 points), "  \
+             "etc.",                                                                                                   \
+             int, 1)                                                                                                   \
+  LIST_ENTRY(point_cloud_max_range,                                                                                    \
+             "Maximum range in meters for the point cloud. Points beyond this distance are dropped. "                  \
+             "Set to 0.0 to disable.",                                                                                 \
+             float, 0.0f)
 
 class K4AROSDeviceParams : public rclcpp::Node
 {

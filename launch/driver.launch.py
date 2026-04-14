@@ -130,6 +130,14 @@ def generate_launch_description():
         default_value="0",
         description="Desired output rate of IMU messages. Set to 0 (default) for full rate (1.6 kHz)."),
     DeclareLaunchArgument(
+        'point_cloud_downsample_factor',
+        default_value="1",
+        description="Downsample factor for the point cloud. 1 = full resolution, 2 = half in each dimension (1/4 points), etc."),
+    DeclareLaunchArgument(
+        'point_cloud_max_range',
+        default_value="0.0",
+        description="Maximum range in meters for the point cloud. Points beyond this distance are dropped. Set to 0.0 to disable."),
+    DeclareLaunchArgument(
         'wired_sync_mode',
         default_value="0",
         description="Wired sync mode. 0: OFF, 1: MASTER, 2: SUBORDINATE."),
@@ -160,6 +168,8 @@ def generate_launch_description():
             {'rescale_ir_to_mono8': launch.substitutions.LaunchConfiguration('rescale_ir_to_mono8')},
             {'ir_mono8_scaling_factor': launch.substitutions.LaunchConfiguration('ir_mono8_scaling_factor')},
             {'imu_rate_target': launch.substitutions.LaunchConfiguration('imu_rate_target')},
+            {'point_cloud_downsample_factor': launch.substitutions.LaunchConfiguration('point_cloud_downsample_factor')},
+            {'point_cloud_max_range': launch.substitutions.LaunchConfiguration('point_cloud_max_range')},
             {'wired_sync_mode': launch.substitutions.LaunchConfiguration('wired_sync_mode')},
             {'subordinate_delay_off_master_usec': launch.substitutions.LaunchConfiguration('subordinate_delay_off_master_usec')}]),
     # If flag overwrite_robot_description is set:
